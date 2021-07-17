@@ -1,5 +1,23 @@
-#ifndef ARMJIT_COMPILER_H
-#define ARMJIT_COMPILER_H
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
+#ifndef ARMJIT_X64_COMPILER_H
+#define ARMJIT_X64_COMPILER_H
 
 #include "../dolphin/x64Emitter.h"
 
@@ -61,7 +79,7 @@ public:
 
     void Reset();
 
-    JitBlockEntry CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[], int instrsCount);
+    JitBlockEntry CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[], int instrsCount, bool hasMemoryInstr);
 
     void LoadReg(int reg, Gen::X64Reg nativeReg);
     void SaveReg(int reg, Gen::X64Reg nativeReg);
@@ -174,8 +192,8 @@ public:
 
     Gen::FixupBranch CheckCondition(u32 cond);
 
-    void PushRegs(bool saveHiRegs);
-    void PopRegs(bool saveHiRegs);
+    void PushRegs(bool saveHiRegs, bool saveRegsToBeChanged, bool allowUnload = true);
+    void PopRegs(bool saveHiRegs, bool saveRegsToBeChanged);
 
     Gen::OpArg MapReg(int reg)
     {
@@ -208,9 +226,9 @@ public:
         SetCodePtr(FarCode);
     }
 
-    bool IsJITFault(u64 addr);
+    bool IsJITFault(u8* addr);
 
-    s32 RewriteMemAccess(u64 pc);
+    u8* RewriteMemAccess(u8* pc);
 
     u8* FarCode;
     u8* NearCode;

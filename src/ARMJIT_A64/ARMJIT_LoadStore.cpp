@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT_Compiler.h"
 
 #include "../Config.h"
@@ -9,40 +27,37 @@ using namespace Arm64Gen;
 namespace ARMJIT
 {
 
-bool Compiler::IsJITFault(u64 pc)
+bool Compiler::IsJITFault(u8* pc)
 {
-    return pc >= (u64)GetRXBase() && pc - (u64)GetRXBase() < (JitMemMainSize + JitMemSecondarySize);
+    return (u64)pc >= (u64)GetRXBase() && (u64)pc - (u64)GetRXBase() < (JitMemMainSize + JitMemSecondarySize);
 }
 
-s64 Compiler::RewriteMemAccess(u64 pc)
+u8* Compiler::RewriteMemAccess(u8* pc)
 {
-    ptrdiff_t pcOffset = pc - (u64)GetRXBase();
+    ptrdiff_t pcOffset = pc - GetRXBase();
 
     auto it = LoadStorePatches.find(pcOffset);
 
     if (it != LoadStorePatches.end())
     {
         LoadStorePatch patch = it->second;
+        LoadStorePatches.erase(it);
 
         ptrdiff_t curCodeOffset = GetCodeOffset();
 
         SetCodePtrUnsafe(pcOffset + patch.PatchOffset);
 
         BL(patch.PatchFunc);
-
         for (int i = 0; i < patch.PatchSize / 4 - 1; i++)
             HINT(HINT_NOP);
-
         FlushIcacheSection((u8*)pc + patch.PatchOffset, (u8*)GetRXPtr());
 
         SetCodePtrUnsafe(curCodeOffset);
 
-        LoadStorePatches.erase(it);
-
-        return patch.PatchOffset;
+        return pc + (ptrdiff_t)patch.PatchOffset;
     }
     printf("this is a JIT bug! %08x\n", __builtin_bswap32(*(u32*)pc));
-    assert(false);
+    abort();
 }
 
 bool Compiler::Comp_MemLoadLiteral(int size, bool signExtend, int rd, u32 addr)
@@ -65,7 +80,7 @@ bool Compiler::Comp_MemLoadLiteral(int size, bool signExtend, int rd, u32 addr)
     if (size == 32)
     {
         CurCPU->DataRead32(addr & ~0x3, &val);
-        val = ROR(val, (addr & 0x3) << 3);
+        val = ::ROR(val, (addr & 0x3) << 3);
     }
     else if (size == 16)
     {
@@ -119,6 +134,12 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         rnMapped = W3;
     }
 
+    if (flags & memop_Store && flags & (memop_Post|memop_Writeback) && rd == rn)
+    {
+        MOV(W4, rdMapped);
+        rdMapped = W4;
+    }
+
     ARM64Reg finalAddr = W0;
     if (flags & memop_Post)
     {
@@ -151,7 +172,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
     {
         if (offset.Reg.ShiftType == ST_ROR)
         {
-            ROR_(W0, offset.Reg.Rm, offset.Reg.ShiftAmount);
+            ROR(W0, offset.Reg.Rm, offset.Reg.ShiftAmount);
             offset = Op2(W0);
         }
 
@@ -173,12 +194,10 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         ptrdiff_t memopStart = GetCodeOffset();
         LoadStorePatch patch;
 
+        assert((rdMapped >= W8 && rdMapped <= W15) || (rdMapped >= W19 && rdMapped <= W25) || rdMapped == W4);
         patch.PatchFunc = flags & memop_Store
-            ? PatchedStoreFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][rdMapped - W19]
-            : PatchedLoadFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][!!(flags & memop_SignExtend)][rdMapped - W19];
-        assert(rdMapped - W19 >= 0 && rdMapped - W19 < 8);
-
-        MOVP2R(X7, Num == 0 ? ARMJIT_Memory::FastMem9Start : ARMJIT_Memory::FastMem7Start);
+            ? PatchedStoreFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][rdMapped]
+            : PatchedLoadFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][!!(flags & memop_SignExtend)][rdMapped];
 
         // take a chance at fastmem
         if (size > 8)
@@ -187,12 +206,12 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         ptrdiff_t loadStorePosition = GetCodeOffset();
         if (flags & memop_Store)
         {
-            STRGeneric(size, rdMapped, size > 8 ? X1 : X0, X7);
+            STRGeneric(size, rdMapped, size > 8 ? X1 : X0, RMemBase);
         }
         else
         {
-            LDRGeneric(size, flags & memop_SignExtend, rdMapped, size > 8 ? X1 : X0, X7);
-            if (size == 32)
+            LDRGeneric(size, flags & memop_SignExtend, rdMapped, size > 8 ? X1 : X0, RMemBase);
+            if (size == 32 && !addrIsStatic)
             {
                 UBFIZ(W0, W0, 3, 2);
                 RORV(rdMapped, rdMapped, W0);
@@ -209,18 +228,22 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         if (addrIsStatic)
             func = ARMJIT_Memory::GetFuncForAddr(CurCPU, staticAddress, flags & memop_Store, size);
 
+        PushRegs(false, false);
+
         if (func)
         {
             if (flags & memop_Store)
                 MOV(W1, rdMapped);
             QuickCallFunction(X2, (void (*)())func);
 
+            PopRegs(false, false);
+
             if (!(flags & memop_Store))
             {
                 if (size == 32)
                 {
                     if (staticAddress & 0x3)
-                        ROR_(rdMapped, W0, (staticAddress & 0x3) << 3);
+                        ROR(rdMapped, W0, (staticAddress & 0x3) << 3);
                     else
                         MOV(rdMapped, W0);
                 }
@@ -292,6 +315,8 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
                     }
                 }
             }
+
+            PopRegs(false, false);
 
             if (!(flags & memop_Store))
             {
@@ -475,34 +500,26 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     bool compileFastPath = Config::JIT_FastMemory
         && store && !usermode && (CurInstr.Cond() < 0xE || ARMJIT_Memory::IsFastmemCompatible(expectedTarget));
 
-    if (decrement)
     {
-        s32 offset = -regsCount * 4 + (preinc ? 0 : 4);
+        s32 offset = decrement
+            ? -regsCount * 4 + (preinc ? 0 : 4)
+            : (preinc ? 4 : 0);
+
         if (offset)
-        {
             ADDI2R(W0, MapReg(rn), offset);
-            ANDI2R(W0, W0, ~3);
-        }
-        else
-        {
+        else if (compileFastPath)
             ANDI2R(W0, MapReg(rn), ~3);
-        }
-    }
-    else
-    {
-        ANDI2R(W0, MapReg(rn), ~3);
-        if (preinc)
-            ADD(W0, W0, 4);
+        else
+            MOV(W0, MapReg(rn));
     }
 
     u8* patchFunc;
     if (compileFastPath)
     {
         ptrdiff_t fastPathStart = GetCodeOffset();
-        ptrdiff_t loadStoreOffsets[16];
+        ptrdiff_t loadStoreOffsets[8];
 
-        MOVP2R(X1, Num == 0 ? ARMJIT_Memory::FastMem9Start : ARMJIT_Memory::FastMem7Start);
-        ADD(X1, X1, X0);
+        ADD(X1, RMemBase, X0);
 
         u32 offset = 0;
         BitSet16::Iterator it = regs.begin();
@@ -550,16 +567,19 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 LoadReg(nextReg, second);
 
             loadStoreOffsets[i++] = GetCodeOffset();
-
             if (store)
+            {
                 STP(INDEX_SIGNED, first, second, X1, offset);
+            }
             else
+            {
                 LDP(INDEX_SIGNED, first, second, X1, offset);
-
-            if (!(RegCache.LoadedRegs & (1 << reg)) && !store)
-                SaveReg(reg, first);
-            if (!(RegCache.LoadedRegs & (1 << nextReg)) && !store)
-                SaveReg(nextReg, second);
+            
+                if (!(RegCache.LoadedRegs & (1 << reg)))
+                    SaveReg(reg, first);
+                if (!(RegCache.LoadedRegs & (1 << nextReg)))
+                    SaveReg(nextReg, second);
+            }
 
             offset += 8;
         }
@@ -569,7 +589,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         SwapCodeRegion();
         patchFunc = (u8*)GetRXPtr();
         patch.PatchFunc = patchFunc;
-        for (i = 0; i < regsCount; i++)
+        u32 numLoadStores = i;
+        for (i = 0; i < numLoadStores; i++)
         {
             patch.PatchOffset = fastPathStart - loadStoreOffsets[i];
             LoadStorePatches[loadStoreOffsets[i]] = patch;
@@ -637,6 +658,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         }
     }
 
+    PushRegs(false, false, !compileFastPath);
+
     ADD(X1, SP, 0);
     MOVI2R(W2, regsCount);
 
@@ -661,6 +684,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         case 3: QuickCallFunction(X4, SlowBlockTransfer7<true, 1>); break;
         }
     }
+
+    PopRegs(false, false);
 
     if (!store)
     {

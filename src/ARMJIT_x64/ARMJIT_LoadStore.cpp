@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT_Compiler.h"
 
 #include "../Config.h"
@@ -15,31 +33,27 @@ int squeezePointer(T* ptr)
     return truncated;
 }
 
-s32 Compiler::RewriteMemAccess(u64 pc)
+u8* Compiler::RewriteMemAccess(u8* pc)
 {
-    auto it = LoadStorePatches.find((u8*)pc);
+    auto it = LoadStorePatches.find(pc);
     if (it != LoadStorePatches.end())
     {
         LoadStorePatch patch = it->second;
         LoadStorePatches.erase(it);
 
-        u8* curCodePtr = GetWritableCodePtr();
-        u8* rewritePtr = (u8*)pc + (ptrdiff_t)patch.Offset;
-        SetCodePtr(rewritePtr);
+        //printf("rewriting memory access %p %d %d\n", (u8*)pc-ResetStart, patch.Offset, patch.Size);
 
-        CALL(patch.PatchFunc);
-        u32 remainingSize = patch.Size - (GetWritableCodePtr() - rewritePtr);
+        XEmitter emitter(pc + (ptrdiff_t)patch.Offset);
+        emitter.CALL(patch.PatchFunc);
+        ptrdiff_t remainingSize = (ptrdiff_t)patch.Size - 5;
+        assert(remainingSize >= 0);
         if (remainingSize > 0)
-            NOP(remainingSize);
+            emitter.NOP(remainingSize);
 
-        //printf("rewriting memory access %p %d %d\n", patch.PatchFunc, patch.Offset, patch.Size);
-
-        SetCodePtr(curCodePtr);
-
-        return patch.Offset;
+        return pc + (ptrdiff_t)patch.Offset;
     }
 
-    printf("this is a JIT bug %x\n", pc);
+    printf("this is a JIT bug %sx\n", pc);
     abort();
 }
 
@@ -73,7 +87,7 @@ bool Compiler::Comp_MemLoadLiteral(int size, bool signExtend, int rd, u32 addr)
     if (size == 32)
     {
         CurCPU->DataRead32(addr & ~0x3, &val);
-        val = ROR(val, (addr & 0x3) << 3);
+        val = ::ROR(val, (addr & 0x3) << 3);
     }
     else if (size == 16)
     {
@@ -134,6 +148,12 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
     if (Thumb && rn == 15)
         rnMapped = Imm32(R15 & ~0x2);
 
+    if (flags & memop_Store && flags & (memop_Post|memop_Writeback) && rd == rn)
+    {
+        MOV(32, R(RSCRATCH4), rdMapped);
+        rdMapped = R(RSCRATCH4);
+    }
+
     X64Reg finalAddr = RSCRATCH3;
     if (flags & memop_Post)
     {
@@ -192,6 +212,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
         u8* memopStart = GetWritableCodePtr();
         LoadStorePatch patch;
 
+        assert(rdMapped.GetSimpleReg() >= 0 && rdMapped.GetSimpleReg() < 16);
         patch.PatchFunc = flags & memop_Store
             ? PatchedStoreFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][rdMapped.GetSimpleReg()]
             : PatchedLoadFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][!!(flags & memop_SignExtend)][rdMapped.GetSimpleReg()];
@@ -225,13 +246,13 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
                 if (addrIsStatic)
                 {
                     if (staticAddress & 0x3)
-                        ROR_(32, rdMapped, Imm8((staticAddress & 0x3) * 8));
+                        ROR(32, rdMapped, Imm8((staticAddress & 0x3) * 8));
                 }
                 else
                 {
                     AND(32, R(RSCRATCH3), Imm8(0x3));
                     SHL(32, R(RSCRATCH3), Imm8(3));
-                    ROR_(32, rdMapped, R(RSCRATCH3));
+                    ROR(32, rdMapped, R(RSCRATCH3));
                 }
             }
         }
@@ -245,7 +266,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
     }
     else
     {
-        PushRegs(false);
+        PushRegs(false, false);
 
         void* func = NULL;
         if (addrIsStatic)
@@ -262,7 +283,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
 
             ABI_CallFunction((void (*)())func);
 
-            PopRegs(false);
+            PopRegs(false, false);
 
             if (!(flags & memop_Store))
             {
@@ -270,7 +291,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
                 {
                     MOV(32, rdMapped, R(RSCRATCH));
                     if (staticAddress & 0x3)
-                        ROR_(32, rdMapped, Imm8((staticAddress & 0x3) * 8));
+                        ROR(32, rdMapped, Imm8((staticAddress & 0x3) * 8));
                 }
                 else
                 {
@@ -285,13 +306,15 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
         {
             if (Num == 0)
             {
+                // on Windows param 3 is R8 which is also scratch 4 which can be used for rd
+                if (flags & memop_Store)
+                    MOV(32, R(ABI_PARAM3), rdMapped);
+
                 MOV(64, R(ABI_PARAM2), R(RCPU));
                 if (ABI_PARAM1 != RSCRATCH3)
                     MOV(32, R(ABI_PARAM1), R(RSCRATCH3));
                 if (flags & memop_Store)
                 {
-                    MOV(32, R(ABI_PARAM3), rdMapped);
-
                     switch (size | NDS::ConsoleType)
                     {
                     case 32: CALL((void*)&SlowWrite9<u32, 0>); break;
@@ -347,7 +370,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
                 }
             }
 
-            PopRegs(false);
+            PopRegs(false, false);
             
             if (!(flags & memop_Store))
             {
@@ -485,7 +508,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     if (!store)
     {
-        PushRegs(false);
+        PushRegs(false, false, !compileFastPath);
 
         MOV(32, R(ABI_PARAM1), R(RSCRATCH4));
         MOV(32, R(ABI_PARAM3), Imm32(regsCount));
@@ -506,7 +529,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         case 3: CALL((void*)&SlowBlockTransfer7<false, 1>); break;
         }
 
-        PopRegs(false);
+        PopRegs(false, false);
 
         if (allocOffset)
             ADD(64, R(RSP), Imm8(allocOffset));
@@ -583,7 +606,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         if (allocOffset)
             SUB(64, R(RSP), Imm8(allocOffset));
 
-        PushRegs(false);
+        PushRegs(false, false, !compileFastPath);
 
         MOV(32, R(ABI_PARAM1), R(RSCRATCH4));
         if (allocOffset)
@@ -605,7 +628,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
         ADD(64, R(RSP), stackAlloc <= INT8_MAX ? Imm8(stackAlloc) : Imm32(stackAlloc));
     
-        PopRegs(false);
+        PopRegs(false, false);
     }
 
     if (compileFastPath)

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -26,7 +26,7 @@
 namespace Config
 {
 
-typedef struct
+struct ConfigEntry
 {
     char Name[32];
     int Type;
@@ -34,8 +34,7 @@ typedef struct
     int DefaultInt;
     const char* DefaultStr;
     int StrLength; // should be set to actual array length minus one
-
-} ConfigEntry;
+};
 
 FILE* GetConfigFile(const char* fileName, const char* permissions);
 bool HasConfigFile(const char* fileName);
@@ -45,11 +44,17 @@ void Save();
 extern char BIOS9Path[1024];
 extern char BIOS7Path[1024];
 extern char FirmwarePath[1024];
+extern int DLDIEnable;
+extern char DLDISDPath[1024];
 
 extern char DSiBIOS9Path[1024];
 extern char DSiBIOS7Path[1024];
 extern char DSiFirmwarePath[1024];
 extern char DSiNANDPath[1024];
+extern int DSiSDEnable;
+extern char DSiSDPath[1024];
+
+extern int RandomizeMAC;
 
 #ifdef JIT_ENABLED
 extern int JIT_Enable;

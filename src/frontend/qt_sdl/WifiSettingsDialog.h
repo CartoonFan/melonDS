@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -42,7 +42,7 @@ public:
         }
 
         currentDlg = new WifiSettingsDialog(parent);
-        currentDlg->show();
+        currentDlg->open();
         return currentDlg;
     }
     static void closeDlg()
@@ -50,11 +50,13 @@ public:
         currentDlg = nullptr;
     }
 
-private slots:
-    void on_WifiSettingsDialog_accepted();
-    void on_WifiSettingsDialog_rejected();
+    static bool needsReset;
 
-    void on_cbDirectMode_stateChanged(int state);
+private slots:
+    void done(int r);
+
+    void on_rbDirectMode_clicked();
+    void on_rbIndirectMode_clicked();
     void on_cbxDirectAdapter_currentIndexChanged(int sel);
 
 private:

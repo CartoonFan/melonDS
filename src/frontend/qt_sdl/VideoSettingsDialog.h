@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -64,6 +64,7 @@ private slots:
     void on_sbVSyncInterval_valueChanged(int val);
 
     void on_cbxGLResolution_currentIndexChanged(int idx);
+    void on_cbBetterPolygons_stateChanged(int state);
 
     void on_cbSoftwareThreaded_stateChanged(int state);
 
@@ -78,6 +79,7 @@ private:
     int oldVSyncInterval;
     int oldSoftThreaded;
     int oldGLScale;
+    int oldGLBetterPolygons;
 };
 
 #endif // VIDEOSETTINGSDIALOG_H

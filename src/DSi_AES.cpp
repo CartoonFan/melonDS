@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -38,8 +38,8 @@ bool OutputFlush;
 u32 InputDMASize, OutputDMASize;
 u32 AESMode;
 
-FIFO<u32>* InputFIFO;
-FIFO<u32>* OutputFIFO;
+FIFO<u32, 16> InputFIFO;
+FIFO<u32, 16> OutputFIFO;
 
 u8 IV[16];
 
@@ -51,6 +51,10 @@ u8 KeyY[4][16];
 
 u8 CurKey[16];
 u8 CurMAC[16];
+
+// output MAC for CCM encrypt
+u8 OutputMAC[16];
+bool OutputMACDue;
 
 AES_ctx Ctx;
 
@@ -87,9 +91,6 @@ void ROL16(u8* val, u32 n)
 
 bool Init()
 {
-    InputFIFO = new FIFO<u32>(16);
-    OutputFIFO = new FIFO<u32>(16);
-
     const u8 zero[16] = {0};
     AES_init_ctx_iv(&Ctx, zero, zero);
 
@@ -98,8 +99,6 @@ bool Init()
 
 void DeInit()
 {
-    delete InputFIFO;
-    delete OutputFIFO;
 }
 
 void Reset()
@@ -115,8 +114,8 @@ void Reset()
     OutputDMASize = 0;
     AESMode = 0;
 
-    InputFIFO->Clear();
-    OutputFIFO->Clear();
+    InputFIFO.Clear();
+    OutputFIFO.Clear();
 
     memset(IV, 0, sizeof(IV));
 
@@ -128,6 +127,9 @@ void Reset()
 
     memset(CurKey, 0, sizeof(CurKey));
     memset(CurMAC, 0, sizeof(CurMAC));
+
+    memset(OutputMAC, 0, sizeof(OutputMAC));
+    OutputMACDue = false;
 
     // initialize keys
 
@@ -157,10 +159,10 @@ void ProcessBlock_CCM_Decrypt()
     u8 data[16];
     u8 data_rev[16];
 
-    *(u32*)&data[0] = InputFIFO->Read();
-    *(u32*)&data[4] = InputFIFO->Read();
-    *(u32*)&data[8] = InputFIFO->Read();
-    *(u32*)&data[12] = InputFIFO->Read();
+    *(u32*)&data[0] = InputFIFO.Read();
+    *(u32*)&data[4] = InputFIFO.Read();
+    *(u32*)&data[8] = InputFIFO.Read();
+    *(u32*)&data[12] = InputFIFO.Read();
 
     //printf("AES-CCM: "); _printhex2(data, 16);
 
@@ -174,10 +176,10 @@ void ProcessBlock_CCM_Decrypt()
 
     //printf(" -> "); _printhex2(data, 16);
 
-    OutputFIFO->Write(*(u32*)&data[0]);
-    OutputFIFO->Write(*(u32*)&data[4]);
-    OutputFIFO->Write(*(u32*)&data[8]);
-    OutputFIFO->Write(*(u32*)&data[12]);
+    OutputFIFO.Write(*(u32*)&data[0]);
+    OutputFIFO.Write(*(u32*)&data[4]);
+    OutputFIFO.Write(*(u32*)&data[8]);
+    OutputFIFO.Write(*(u32*)&data[12]);
 }
 
 void ProcessBlock_CCM_Encrypt()
@@ -185,10 +187,10 @@ void ProcessBlock_CCM_Encrypt()
     u8 data[16];
     u8 data_rev[16];
 
-    *(u32*)&data[0] = InputFIFO->Read();
-    *(u32*)&data[4] = InputFIFO->Read();
-    *(u32*)&data[8] = InputFIFO->Read();
-    *(u32*)&data[12] = InputFIFO->Read();
+    *(u32*)&data[0] = InputFIFO.Read();
+    *(u32*)&data[4] = InputFIFO.Read();
+    *(u32*)&data[8] = InputFIFO.Read();
+    *(u32*)&data[12] = InputFIFO.Read();
 
     //printf("AES-CCM: "); _printhex2(data, 16);
 
@@ -202,10 +204,10 @@ void ProcessBlock_CCM_Encrypt()
 
     //printf(" -> "); _printhex2(data, 16);
 
-    OutputFIFO->Write(*(u32*)&data[0]);
-    OutputFIFO->Write(*(u32*)&data[4]);
-    OutputFIFO->Write(*(u32*)&data[8]);
-    OutputFIFO->Write(*(u32*)&data[12]);
+    OutputFIFO.Write(*(u32*)&data[0]);
+    OutputFIFO.Write(*(u32*)&data[4]);
+    OutputFIFO.Write(*(u32*)&data[8]);
+    OutputFIFO.Write(*(u32*)&data[12]);
 }
 
 void ProcessBlock_CTR()
@@ -213,10 +215,10 @@ void ProcessBlock_CTR()
     u8 data[16];
     u8 data_rev[16];
 
-    *(u32*)&data[0] = InputFIFO->Read();
-    *(u32*)&data[4] = InputFIFO->Read();
-    *(u32*)&data[8] = InputFIFO->Read();
-    *(u32*)&data[12] = InputFIFO->Read();
+    *(u32*)&data[0] = InputFIFO.Read();
+    *(u32*)&data[4] = InputFIFO.Read();
+    *(u32*)&data[8] = InputFIFO.Read();
+    *(u32*)&data[12] = InputFIFO.Read();
 
     //printf("AES-CTR: "); _printhex2(data, 16);
 
@@ -226,10 +228,10 @@ void ProcessBlock_CTR()
 
     //printf(" -> "); _printhex(data, 16);
 
-    OutputFIFO->Write(*(u32*)&data[0]);
-    OutputFIFO->Write(*(u32*)&data[4]);
-    OutputFIFO->Write(*(u32*)&data[8]);
-    OutputFIFO->Write(*(u32*)&data[12]);
+    OutputFIFO.Write(*(u32*)&data[0]);
+    OutputFIFO.Write(*(u32*)&data[4]);
+    OutputFIFO.Write(*(u32*)&data[8]);
+    OutputFIFO.Write(*(u32*)&data[12]);
 }
 
 
@@ -237,8 +239,8 @@ u32 ReadCnt()
 {
     u32 ret = Cnt;
 
-    ret |= InputFIFO->Level();
-    ret |= (OutputFIFO->Level() << 5);
+    ret |= InputFIFO.Level();
+    ret |= (OutputFIFO.Level() << 5);
 
     return ret;
 }
@@ -271,6 +273,8 @@ void WriteCnt(u32 val)
     {
         // transfer start (checkme)
         RemBlocks = BlkCnt >> 16;
+
+        OutputMACDue = false;
 
         if (AESMode == 0 && (!(val & (1<<20)))) printf("AES: CCM-DECRYPT MAC FROM WRFIFO, TODO\n");
 
@@ -332,9 +336,9 @@ void WriteBlkCnt(u32 val)
 
 u32 ReadOutputFIFO()
 {
-    if (OutputFIFO->IsEmpty()) printf("!!! AES OUTPUT FIFO EMPTY\n");
+    if (OutputFIFO.IsEmpty()) printf("!!! AES OUTPUT FIFO EMPTY\n");
 
-    u32 ret = OutputFIFO->Read();
+    u32 ret = OutputFIFO.Read();
 
     if (Cnt & (1<<31))
     {
@@ -343,10 +347,19 @@ u32 ReadOutputFIFO()
     }
     else
     {
-        if (OutputFIFO->Level() > 0)
+        if (OutputFIFO.Level() > 0)
             DSi::CheckNDMAs(1, 0x2B);
         else
             DSi::StopNDMAs(1, 0x2B);
+
+        if (OutputMACDue && OutputFIFO.Level() <= 12)
+        {
+            OutputFIFO.Write(*(u32*)&OutputMAC[0]);
+            OutputFIFO.Write(*(u32*)&OutputMAC[4]);
+            OutputFIFO.Write(*(u32*)&OutputMAC[8]);
+            OutputFIFO.Write(*(u32*)&OutputMAC[12]);
+            OutputMACDue = false;
+        }
     }
 
     return ret;
@@ -356,9 +369,9 @@ void WriteInputFIFO(u32 val)
 {
     // TODO: add some delay to processing
 
-    if (InputFIFO->IsFull()) printf("!!! AES INPUT FIFO FULL\n");
+    if (InputFIFO.IsFull()) printf("!!! AES INPUT FIFO FULL\n");
 
-    InputFIFO->Write(val);
+    InputFIFO.Write(val);
 
     if (!(Cnt & (1<<31))) return;
 
@@ -369,7 +382,7 @@ void CheckInputDMA()
 {
     if (RemBlocks == 0) return;
 
-    if (InputFIFO->Level() <= InputDMASize)
+    if (InputFIFO.Level() <= InputDMASize)
     {
         // trigger input DMA
         DSi::CheckNDMAs(1, 0x2A);
@@ -380,7 +393,7 @@ void CheckInputDMA()
 
 void CheckOutputDMA()
 {
-    if (OutputFIFO->Level() >= OutputDMASize)
+    if (OutputFIFO.Level() >= OutputDMASize)
     {
         // trigger output DMA
         DSi::CheckNDMAs(1, 0x2B);
@@ -389,7 +402,7 @@ void CheckOutputDMA()
 
 void Update()
 {
-    while (InputFIFO->Level() >= 4 && OutputFIFO->Level() <= 12 && RemBlocks > 0)
+    while (InputFIFO.Level() >= 4 && OutputFIFO.Level() <= 12 && RemBlocks > 0)
     {
         switch (AESMode)
         {
@@ -429,13 +442,8 @@ void Update()
             Ctx.Iv[15] = 0x00;
             AES_CTR_xcrypt_buffer(&Ctx, CurMAC, 16);
 
-            u8 finalmac[16];
-            Swap16(finalmac, CurMAC);
-
-            OutputFIFO->Write(*(u32*)&finalmac[0]);
-            OutputFIFO->Write(*(u32*)&finalmac[4]);
-            OutputFIFO->Write(*(u32*)&finalmac[8]);
-            OutputFIFO->Write(*(u32*)&finalmac[12]);
+            Swap16(OutputMAC, CurMAC);
+            OutputMACDue = true;
 
             // CHECKME
             Cnt &= ~(1<<21);
@@ -450,7 +458,7 @@ void Update()
         if (Cnt & (1<<30)) NDS::SetIRQ2(NDS::IRQ2_DSi_AES);
         DSi::StopNDMAs(1, 0x2A);
 
-        if (OutputFIFO->Level() > 0)
+        if (!OutputFIFO.IsEmpty())
             DSi::CheckNDMAs(1, 0x2B);
         else
             DSi::StopNDMAs(1, 0x2B);

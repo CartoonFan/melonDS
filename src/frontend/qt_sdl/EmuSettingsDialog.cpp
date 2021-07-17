@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -44,11 +44,15 @@ EmuSettingsDialog::EmuSettingsDialog(QWidget* parent) : QDialog(parent), ui(new 
     ui->txtBIOS9Path->setText(Config::BIOS9Path);
     ui->txtBIOS7Path->setText(Config::BIOS7Path);
     ui->txtFirmwarePath->setText(Config::FirmwarePath);
+    ui->cbDLDIEnable->setChecked(Config::DLDIEnable != 0);
+    ui->txtDLDISDPath->setText(Config::DLDISDPath);
 
     ui->txtDSiBIOS9Path->setText(Config::DSiBIOS9Path);
     ui->txtDSiBIOS7Path->setText(Config::DSiBIOS7Path);
     ui->txtDSiFirmwarePath->setText(Config::DSiFirmwarePath);
     ui->txtDSiNANDPath->setText(Config::DSiNANDPath);
+    ui->cbDSiSDEnable->setChecked(Config::DSiSDEnable != 0);
+    ui->txtDSiSDPath->setText(Config::DSiSDPath);
 
     ui->cbxConsoleType->addItem("DS");
     ui->cbxConsoleType->addItem("DSi (experimental)");
@@ -61,6 +65,9 @@ EmuSettingsDialog::EmuSettingsDialog(QWidget* parent) : QDialog(parent), ui(new 
     ui->chkJITBranchOptimisations->setChecked(Config::JIT_BranchOptimisations != 0);
     ui->chkJITLiteralOptimisations->setChecked(Config::JIT_LiteralOptimisations != 0);
     ui->chkJITFastMemory->setChecked(Config::JIT_FastMemory != 0);
+    #ifdef __APPLE__
+        ui->chkJITFastMemory->setDisabled(true);
+    #endif
     ui->spnJITMaximumBlockSize->setValue(Config::JIT_MaxBlockSize);
 #else
     ui->chkEnableJIT->setDisabled(true);
@@ -141,10 +148,14 @@ void EmuSettingsDialog::done(int r)
         std::string bios9Path = ui->txtBIOS9Path->text().toStdString();
         std::string bios7Path = ui->txtBIOS7Path->text().toStdString();
         std::string firmwarePath = ui->txtFirmwarePath->text().toStdString();
+        int dldiEnable = ui->cbDLDIEnable->isChecked() ? 1:0;
+        std::string dldiSDPath = ui->txtDLDISDPath->text().toStdString();
         std::string dsiBios9Path = ui->txtDSiBIOS9Path->text().toStdString();
         std::string dsiBios7Path = ui->txtDSiBIOS7Path->text().toStdString();
         std::string dsiFirmwarePath = ui->txtDSiFirmwarePath->text().toStdString();
         std::string dsiNANDPath = ui->txtDSiNANDPath->text().toStdString();
+        int dsiSDEnable = ui->cbDSiSDEnable->isChecked() ? 1:0;
+        std::string dsiSDPath = ui->txtDSiSDPath->text().toStdString();
 
         if (consoleType != Config::ConsoleType
             || directBoot != Config::DirectBoot
@@ -158,10 +169,14 @@ void EmuSettingsDialog::done(int r)
             || strcmp(Config::BIOS9Path, bios9Path.c_str()) != 0
             || strcmp(Config::BIOS7Path, bios7Path.c_str()) != 0
             || strcmp(Config::FirmwarePath, firmwarePath.c_str()) != 0
+            || dldiEnable != Config::DLDIEnable
+            || strcmp(Config::DLDISDPath, dldiSDPath.c_str()) != 0
             || strcmp(Config::DSiBIOS9Path, dsiBios9Path.c_str()) != 0
             || strcmp(Config::DSiBIOS7Path, dsiBios7Path.c_str()) != 0
             || strcmp(Config::DSiFirmwarePath, dsiFirmwarePath.c_str()) != 0
-            || strcmp(Config::DSiNANDPath, dsiNANDPath.c_str()) != 0)
+            || strcmp(Config::DSiNANDPath, dsiNANDPath.c_str()) != 0
+            || dsiSDEnable != Config::DSiSDEnable
+            || strcmp(Config::DSiSDPath, dsiSDPath.c_str()) != 0)
         {
             if (RunningSomething
                 && QMessageBox::warning(this, "Reset necessary to apply changes",
@@ -172,11 +187,15 @@ void EmuSettingsDialog::done(int r)
             strncpy(Config::BIOS9Path, bios9Path.c_str(), 1023); Config::BIOS9Path[1023] = '\0';
             strncpy(Config::BIOS7Path, bios7Path.c_str(), 1023); Config::BIOS7Path[1023] = '\0';
             strncpy(Config::FirmwarePath, firmwarePath.c_str(), 1023); Config::FirmwarePath[1023] = '\0';
+            Config::DLDIEnable = dldiEnable;
+            strncpy(Config::DLDISDPath, dldiSDPath.c_str(), 1023); Config::DLDISDPath[1023] = '\0';
 
             strncpy(Config::DSiBIOS9Path, dsiBios9Path.c_str(), 1023); Config::DSiBIOS9Path[1023] = '\0';
             strncpy(Config::DSiBIOS7Path, dsiBios7Path.c_str(), 1023); Config::DSiBIOS7Path[1023] = '\0';
             strncpy(Config::DSiFirmwarePath, dsiFirmwarePath.c_str(), 1023); Config::DSiFirmwarePath[1023] = '\0';
             strncpy(Config::DSiNANDPath, dsiNANDPath.c_str(), 1023); Config::DSiNANDPath[1023] = '\0';
+            Config::DSiSDEnable = dsiSDEnable;
+            strncpy(Config::DSiSDPath, dsiSDPath.c_str(), 1023); Config::DSiSDPath[1023] = '\0';
 
     #ifdef JIT_ENABLED
             Config::JIT_Enable = jitEnable;
@@ -260,6 +279,18 @@ void EmuSettingsDialog::on_btnDSiBIOS7Browse_clicked()
     ui->txtDSiBIOS7Path->setText(file);
 }
 
+void EmuSettingsDialog::on_btnDLDISDBrowse_clicked()
+{
+    QString file = QFileDialog::getOpenFileName(this,
+                                                "Select DLDI SD image...",
+                                                EmuDirectory,
+                                                "Image files (*.bin *.rom *.img);;Any file (*.*)");
+
+    if (file.isEmpty()) return;
+
+    ui->txtDLDISDPath->setText(file);
+}
+
 void EmuSettingsDialog::on_btnDSiFirmwareBrowse_clicked()
 {
     QString file = QFileDialog::getOpenFileName(this,
@@ -284,11 +315,25 @@ void EmuSettingsDialog::on_btnDSiNANDBrowse_clicked()
     ui->txtDSiNANDPath->setText(file);
 }
 
+void EmuSettingsDialog::on_btnDSiSDBrowse_clicked()
+{
+    QString file = QFileDialog::getOpenFileName(this,
+                                                "Select DSi SD image...",
+                                                EmuDirectory,
+                                                "Image files (*.bin *.rom *.img);;Any file (*.*)");
+
+    if (file.isEmpty()) return;
+
+    ui->txtDSiSDPath->setText(file);
+}
+
 void EmuSettingsDialog::on_chkEnableJIT_toggled()
 {
     bool disabled = !ui->chkEnableJIT->isChecked();
     ui->chkJITBranchOptimisations->setDisabled(disabled);
     ui->chkJITLiteralOptimisations->setDisabled(disabled);
-    ui->chkJITFastMemory->setDisabled(disabled);
+    #ifndef __APPLE__
+        ui->chkJITFastMemory->setDisabled(disabled);
+    #endif
     ui->spnJITMaximumBlockSize->setDisabled(disabled);
 }
